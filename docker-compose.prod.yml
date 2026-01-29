@@ -1,0 +1,87 @@
+# =============================================================================
+# Fraud Detection Pipeline - Production Docker Compose
+# =============================================================================
+# Use: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file overrides development settings for production:
+# - Removes debug ports
+# - Adds resource limits
+# - Stricter restart policies
+
+services:
+
+  # Remove debug ports in production
+  postgres:
+    ports: []
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  zookeeper:
+    ports: []
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  kafka:
+    ports: []
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  schema-registry:
+    ports: []
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  debezium:
+    ports: []
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  lakehouse-ingestion:
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # Keep only essential UI ports
+  kafka-ui:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  minio:
+    # Keep console port, remove API port
+    ports:
+      - "9001:9001"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  airflow:
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  cli:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  stream-service:
+    deploy:
+      resources:
+        limits:
+          memory: 512M

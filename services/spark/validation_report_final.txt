@@ -1,0 +1,23 @@
+============================================================
+DATA CONSISTENCY REPORT
+============================================================
+
+📂 Loading data...
+   Bronze: 14,950 total rows, 14,950 unique IDs
+   Silver: 14,950 total rows, 14,950 unique IDs
+
+🔍 Checking for missing records...
+   ✅ All Bronze records exist in Silver!
+   ✅ No duplicates in Silver
+
+============================================================
+SUMMARY
+============================================================
+
+   Bronze Layer:     14,950 unique records
+   Silver Layer:     14,950 unique records
+   Coverage:         100.0%
+   Missing Records:  0
+
+   ✅ STATUS: FULLY SYNCED
+============================================================
