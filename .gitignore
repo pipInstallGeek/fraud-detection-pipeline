@@ -57,12 +57,22 @@ data/
 *.pickle
 
 # Models (large files)
-models/
+/models/
 *.joblib
 *.h5
 *.pt
 *.pth
 *.onnx
+
+# .NET / C#
+[Bb]in/
+[Oo]bj/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+TestResults/
 
 # Logs
 logs/

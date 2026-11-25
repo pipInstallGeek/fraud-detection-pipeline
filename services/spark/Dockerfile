@@ -39,11 +39,19 @@ COPY --from=jar-downloader /jars/*.jar /opt/spark/jars/
 # Set working directory
 WORKDIR /app
 
-# Install boto3 for bucket management
-RUN pip install --no-cache-dir boto3 "numpy<2"
+# Install Python dependencies for ML/MLOps
+RUN pip install --no-cache-dir \
+    boto3 \
+    "numpy<2" \
+    "sqlalchemy<2.1.0" \
+    skl2onnx \
+    mlflow==2.10.0
 
 # Copy Python scripts
 COPY *.py ./
+
+# Copy Great Expectations suite
+COPY expectations/ ./expectations/
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1

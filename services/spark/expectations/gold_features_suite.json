@@ -1,0 +1,132 @@
+{
+    "expectation_suite_name": "gold_features_suite",
+    "data_asset_type": "Dataset",
+    "expectations": [
+        {
+            "expectation_type": "expect_table_row_count_to_be_between",
+            "kwargs": {
+                "min_value": 1
+            },
+            "meta": {
+                "notes": "Gold layer must have at least 1 record for training"
+            }
+        },
+        {
+            "expectation_type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "id"
+            }
+        },
+        {
+            "expectation_type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "amount"
+            }
+        },
+        {
+            "expectation_type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "type"
+            }
+        },
+        {
+            "expectation_type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "is_fraud"
+            }
+        },
+        {
+            "expectation_type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "avg_amount_24h"
+            }
+        },
+        {
+            "expectation_type": "expect_column_to_exist",
+            "kwargs": {
+                "column": "count_24h"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_not_be_null",
+            "kwargs": {
+                "column": "id"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_not_be_null",
+            "kwargs": {
+                "column": "amount"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_not_be_null",
+            "kwargs": {
+                "column": "type"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_not_be_null",
+            "kwargs": {
+                "column": "is_fraud"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "amount",
+                "min_value": 0
+            },
+            "meta": {
+                "notes": "Transaction amounts must be non-negative"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "avg_amount_24h",
+                "min_value": 0
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "count_24h",
+                "min_value": 0
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_be_in_set",
+            "kwargs": {
+                "column": "is_fraud",
+                "value_set": [
+                    0,
+                    1
+                ]
+            },
+            "meta": {
+                "notes": "Binary fraud label"
+            }
+        },
+        {
+            "expectation_type": "expect_column_values_to_be_in_set",
+            "kwargs": {
+                "column": "type",
+                "value_set": [
+                    "CASH_OUT",
+                    "PAYMENT",
+                    "CASH_IN",
+                    "TRANSFER",
+                    "DEBIT"
+                ]
+            },
+            "meta": {
+                "notes": "Valid PaySim transaction types"
+            }
+        }
+    ],
+    "meta": {
+        "great_expectations_version": "0.18.8",
+        "description": "Validation suite for Gold layer features before ML training"
+    }
+}

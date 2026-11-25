@@ -3,15 +3,10 @@ Gold Transformation - Feature Engineering
 =========================================
 Aggregates customer behavior features for fraud detection.
 Features are calculated over a sliding window (e.g., last 24 steps).
-
-Features:
-- avg_amount_24h: Average transaction amount in the last 24 steps
-- count_24h: Number of transactions in the last 24 steps
-- diff_dest_24h: Number of distinct recipients in the last 24 steps
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, avg, count, approx_count_distinct, current_timestamp
+from pyspark.sql.functions import col, avg, count, current_timestamp, when
 from pyspark.sql.window import Window
 import os
 
@@ -23,6 +18,9 @@ GOLD_PATH = "s3a://lakehouse/gold/features"
 
 spark = SparkSession.builder \
     .appName("Gold-Feature-Engineering") \
+    .config("spark.driver.memory", "4g") \
+    .config("spark.sql.shuffle.partitions", "8") \
+    .config("spark.hadoop.parquet.enable.dictionary", "false") \
     .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
     .config("spark.hadoop.fs.s3a.access.key", MINIO_USER) \
     .config("spark.hadoop.fs.s3a.secret.key", MINIO_PASS) \
@@ -30,49 +28,53 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
 
-print("🚀 Starting Gold Feature Engineering...")
+print("Starting Gold Feature Engineering...")
 
 # 1. Load Silver Data
 try:
     df = spark.read.parquet(SILVER_PATH)
-    print(f"Loaded {df.count()} records from Silver.")
+    print(f"Loaded {df.count():,} records from Silver.")
 except Exception as e:
     print(f"Error loading Silver data: {e}")
     spark.stop()
     exit(1)
 
 # 2. Define Window Spec (Partition by User, Order by Time, Look back 24 steps)
-# Note: 'rangeBetween' works on the VALUE of the order column.
-# Assuming 1 step = 1 hour roughly for this dataset logic.
 window_spec = Window.partitionBy("name_orig").orderBy("step").rangeBetween(-24, 0)
 
-# 3. Compute Features
+# 3. Compute Features (Velocity + Balance Discrepancies)
 features_df = df.withColumn("avg_amount_24h", avg("amount").over(window_spec)) \
                 .withColumn("count_24h", count("id").over(window_spec)) \
+                .withColumn("orig_balance_err", col("new_balance_orig") + col("amount") - col("old_balance_orig")) \
+                .withColumn("dest_balance_err", col("old_balance_dest") + col("amount") - col("new_balance_dest")) \
+                .withColumn("is_empty_balance", when((col("new_balance_orig") == 0) & (col("amount") > 0), 1.0).otherwise(0.0)) \
                 .withColumn("ingested_at", current_timestamp())
-
-# Note: approx_count_distinct typically doesn't work well in Window functions in older Spark versions
-# or requires specific configuration. For simplicity/robustness, we'll skip distinct destinations for now
-# or implement it via a self-join if strictly needed. Keeping it simple for MPV.
 
 # Select final features
 gold_df = features_df.select(
+    "id",
     "step",
     "name_orig",
     "amount",
     "type",
+    "old_balance_orig",
+    "new_balance_orig",
+    "old_balance_dest",
+    "new_balance_dest",
+    "orig_balance_err",
+    "dest_balance_err",
+    "is_empty_balance",
     "avg_amount_24h",
     "count_24h",
     "is_fraud",
     "ingested_at"
 )
 
-# 4. Write to Gold (Overwrite mode for full refresh of features table)
-# For production, you might want to partition by step or date.
+# 4. Write to Gold
 print("Writing features to Gold layer...")
-gold_df.write \
+gold_df.coalesce(4).write \
     .mode("overwrite") \
     .parquet(GOLD_PATH)
 
-print(f"✅ Gold features written to {GOLD_PATH}")
+print(f"Gold features written to {GOLD_PATH}")
 spark.stop()

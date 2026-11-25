@@ -1,0 +1,51 @@
+# =============================================================================
+# Fraud Detection Pipeline - Alerting Rules
+# =============================================================================
+
+groups:
+  - name: pipeline_operational_alerts
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pipeline component {{ $labels.job }} is down"
+          description: "Service instance {{ $labels.instance }} has been unreachable for more than 1 minute."
+
+      - alert: KafkaConsumerLagHigh
+        expr: sum by (consumergroup, topic) (kafka_consumergroup_lag{topic="cdc.public.transactions"}) > 1000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Kafka consumer lag detected for {{ $labels.topic }}"
+          description: "Consumer group {{ $labels.consumergroup }} lag is {{ $value }} messages. Spark ingestion may be lagging behind CDC."
+
+      - alert: DebeziumConnectorDown
+        expr: fraud_debezium_connector_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Debezium PostgreSQL CDC connector is not healthy"
+          description: "The Debezium connector status is failed or paused. CDC stream to Kafka is disrupted."
+
+      - alert: PostgresHighConnections
+        expr: pg_stat_database_numbackends{datname="fraud_db"} > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL high connection count on fraud_db"
+          description: "Database fraud_db has {{ $value }} active connections."
+
+      - alert: LakehouseGoldEmpty
+        expr: fraud_lakehouse_records_count{layer="gold"} == 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Lakehouse Gold feature store has no records"
+          description: "Gold layer has 0 records after 15 minutes of pipeline operation."

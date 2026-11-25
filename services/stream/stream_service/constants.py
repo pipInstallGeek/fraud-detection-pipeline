@@ -13,8 +13,8 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 DEBEZIUM_URL = os.getenv("DEBEZIUM_URL", "http://debezium:8083")
 
 # Stream Settings
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
-ROWS_PER_SECOND = int(os.getenv("ROWS_PER_SECOND", "20"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "1000"))
+ROWS_PER_SECOND = int(os.getenv("ROWS_PER_SECOND", "400"))
 CSV_PATH = os.getenv("CSV_PATH", "/app/data/PS_20174392719_1491204439457_log.csv")
 
 # Config paths

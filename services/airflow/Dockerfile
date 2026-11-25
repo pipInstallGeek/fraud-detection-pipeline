@@ -11,6 +11,6 @@ RUN chmod +x /entrypoint.sh
 
 # Set the correct PYTHONPATH for airflow
 ENV PATH="/home/airflow/.local/bin:$PATH"
-ENV PYTHONPATH="/home/airflow/.local/lib/python3.11/site-packages:$PYTHONPATH"
+ENV PYTHONPATH="/home/airflow/.local/lib/python3.8/site-packages:$PYTHONPATH"
 
 ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]

@@ -1,12 +1,16 @@
 # =============================================================================
 # Fraud Detection Pipeline - Docker Compose
 # =============================================================================
-# Production-ready configuration with health checks and proper dependencies
+# Multi-profile configuration:
+#   default / prod: docker compose up -d (Core streaming, C# ONNX scoring, Lakehouse, Airflow)
+#   dev:            docker compose --profile dev up -d (+ Kafka UI, CSV stream feeder)
+#   monitoring:     docker compose --profile monitoring up -d (+ Prometheus, Grafana, Exporters)
+#   all:            docker compose --profile all up -d (All services)
 
 services:
 
   # ============================================
-  # Data Storage
+  # Data Storage (Core / Prod)
   # ============================================
   postgres:
     image: postgres:15
@@ -37,6 +41,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -87,38 +92,21 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.5.0
-    container_name: schema-registry
-    ports:
-      - "8081:8081"
-    environment:
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-    depends_on:
-      kafka:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
+  # ============================================
+  # Developer Tools (Profile: dev)
+  # ============================================
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.1
     container_name: kafka-ui
+    profiles: ["dev", "all"]
     ports:
       - "8085:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
-      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
     depends_on:
       kafka:
-        condition: service_healthy
-      schema-registry:
         condition: service_healthy
     restart: unless-stopped
 
@@ -154,16 +142,22 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # Lakehouse Ingestion (Spark Streaming)
+  # Lakehouse Ingestion & Real-Time ML (C# .NET)
   # ============================================
   lakehouse-ingestion:
-    build: ./services/spark
+    build: ./services/consumer
     container_name: lakehouse-ingestion
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      Kafka__BootstrapServers: "kafka:29092"
+      Kafka__Topic: "cdc.public.transactions"
+      Kafka__GroupId: "fraud-lakehouse-consumer-group"
+      MinIO__Endpoint: "http://minio:9000"
+      MinIO__AccessKey: ${MINIO_ROOT_USER}
+      MinIO__SecretKey: ${MINIO_ROOT_PASSWORD}
+      MinIO__BucketName: "lakehouse"
+      MinIO__BronzePathPrefix: "bronze/transactions"
     volumes:
-      - ./services/spark:/app
+      - ./services/consumer/src/FraudDetection.Consumer/models:/app/models
     depends_on:
       kafka:
         condition: service_healthy
@@ -172,9 +166,26 @@ services:
     restart: always
 
   # ============================================
+  # Spark Batch Processor (Silver/Gold/ML)
+  # ============================================
+  spark-processor:
+    build: ./services/spark
+    container_name: spark-processor
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./services/spark:/app
+      - ./services/consumer/src/FraudDetection.Consumer/models:/models_prod
+    entrypoint: ["tail", "-f", "/dev/null"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============================================
   # Orchestration (Airflow Standalone)
   # ============================================
-
   airflow:
     build: ./services/airflow
     container_name: airflow
@@ -183,21 +194,21 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
-      # Pass credentials to DAGs for dynamic config
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      RETRAINING_MIN_NEW_ROWS: ${RETRAINING_MIN_NEW_ROWS:-10000}
     volumes:
       - ./services/airflow/dags:/opt/airflow/dags
-      - ./logs/airflow:/opt/airflow/logs
+      - airflow_logs:/opt/airflow/logs
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8082:8080"
-    user: "50000:0"
-    group_add:
-      - "0"
+    user: "0:0"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -206,11 +217,74 @@ services:
     restart: always
 
   # ============================================
-  # Stream Service (Autonomous Transaction Feed)
+  # MLOps - MLflow Tracking Server
+  # ============================================
+  mlflow:
+    build: ./services/mlflow
+    container_name: mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow.db
+      --default-artifact-root s3://lakehouse/mlflow
+    volumes:
+      - mlflow_data:/mlflow
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ============================================
+  # Fraud Monitoring Dashboard (Streamlit)
+  # ============================================
+  dashboard:
+    build: ./services/dashboard
+    container_name: dashboard
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: fraud-detection
+      GOLD_PATH: s3a://lakehouse/gold/features
+      DASHBOARD_DEFAULT_LIMIT: 200
+      DASHBOARD_REFRESH_SECONDS: 15
+    volumes:
+      - ./services/dashboard:/app
+    ports:
+      - "8501:8501"
+    depends_on:
+      minio:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+      lakehouse-ingestion:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================
+  # Transaction Feed Feeder (Profile: dev)
   # ============================================
   stream-service:
     build: ./services/stream
     container_name: stream-service
+    profiles: ["dev", "all"]
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -229,8 +303,111 @@ services:
         condition: service_healthy
       debezium:
         condition: service_healthy
+    restart: "no"
+
+  # ============================================
+  # Monitoring & Observability (Profile: monitoring)
+  # ============================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    profiles: ["monitoring", "all"]
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    profiles: ["monitoring", "all"]
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/fraud_pipeline_overview.json
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Editor"
+    volumes:
+      - ./infra/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    profiles: ["monitoring", "all"]
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka-exporter
+    profiles: ["monitoring", "all"]
+    ports:
+      - "9308:9308"
+    command:
+      - "--kafka.server=kafka:29092"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pipeline-telemetry:
+    build: ./services/monitoring
+    container_name: pipeline-telemetry
+    profiles: ["monitoring", "all"]
+    ports:
+      - "8008:8008"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      DEBEZIUM_URL: http://debezium:8083
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
 
 # =============================================================================
 # Volumes
@@ -241,3 +418,7 @@ volumes:
   kafka_data:
   minio_data:
   debezium_data:
+  mlflow_data:
+  airflow_logs:
+  prometheus_data:
+  grafana_data:

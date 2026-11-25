@@ -41,6 +41,15 @@ def stream_transactions() -> None:
         console.print(f"[red]PostgreSQL connection failed:[/red] {e}")
         return
     
+    # Check how many transactions already exist in PostgreSQL
+    cursor.execute("SELECT COUNT(*) FROM transactions;")
+    existing_count = cursor.fetchone()[0]
+    if existing_count > 0:
+        console.print(f"[yellow]Resuming stream: skipping first {existing_count:,} already-inserted rows from CSV.[/yellow]\n")
+        skip_rows = range(1, existing_count + 1)
+    else:
+        skip_rows = None
+
     columns = [
         'step', 'type', 'amount', 'name_orig', 'old_balance_orig',
         'new_balance_orig', 'name_dest', 'old_balance_dest',
@@ -53,7 +62,12 @@ def stream_transactions() -> None:
     start_time = time.time()
     
     try:
-        for chunk in pd.read_csv(csv_path, chunksize=batch_size):
+        csv_iterator = pd.read_csv(
+            csv_path,
+            chunksize=batch_size,
+            skiprows=skip_rows,
+        )
+        for chunk in csv_iterator:
             if not utils.running:
                 break
             
@@ -68,7 +82,7 @@ def stream_transactions() -> None:
             elapsed = time.time() - start_time
             rate = total_rows / elapsed if elapsed > 0 else 0
             
-            console.print(f"[{batch_num}] +{len(chunk)} rows | Total: {total_rows:,} | {rate:.1f}/sec")
+            console.print(f"[{batch_num}] +{len(chunk)} rows | Session: {total_rows:,} | Total DB: {existing_count + total_rows:,} | {rate:.1f}/sec")
             
             time.sleep(sleep_time)
     
